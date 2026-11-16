@@ -3,8 +3,18 @@ param(
     [Parameter(Mandatory=$true)][string]$PythonInstaller
 )
 $ErrorActionPreference = 'Stop'
+$rootPath = [IO.Path]::GetFullPath($Root)
+$logs = Join-Path $rootPath 'install-logs'
+New-Item -Path $logs -ItemType Directory -Force | Out-Null
+$bootstrapLog = Join-Path $logs 'bootstrap.log'
+$marker = Join-Path $logs 'bootstrap-success.txt'
+Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
+try { Start-Transcript -Path $bootstrapLog -Append -ErrorAction Stop | Out-Null } catch { Write-Warning $_.Exception.Message }
 try {
-    $rootPath = [IO.Path]::GetFullPath($Root)
+    Write-Host ('Serenus bootstrap started: ' + (Get-Date -Format o))
+    Write-Host ('Root: ' + $rootPath)
+    Write-Host ('Python installer: ' + $PythonInstaller)
+    Write-Host ('Python installer exists: ' + (Test-Path -LiteralPath $PythonInstaller))
     $py = Join-Path $rootPath 'python-runtime\python.exe'
     $launcher = Join-Path $rootPath 'launcher'
     $key = Join-Path $launcher 'release-public-key.txt'
@@ -17,11 +27,19 @@ try {
         Write-Host 'Installazione Python locale (senza modificare PATH di sistema)...'
         $sig=Get-AuthenticodeSignature -FilePath $PythonInstaller
         if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') { throw 'Firma del programma Python non verificata' }
-        $args = '/quiet InstallAllUsers=0 Include_pip=1 Include_launcher=0 PrependPath=0 Include_test=0 TargetDir="' + (Join-Path $rootPath 'python-runtime') + '"'
+        $pythonLog = Join-Path $logs 'python-installer.log'
+        $args = '/quiet InstallAllUsers=0 Include_pip=1 Include_launcher=0 PrependPath=0 Include_test=0 TargetDir="' + (Join-Path $rootPath 'python-runtime') + '" /log "' + $pythonLog + '"'
+        Write-Host ('Launching official Python installer: ' + $args)
         $proc = Start-Process -FilePath $PythonInstaller -ArgumentList $args -Wait -PassThru
         if ($proc.ExitCode -ne 0) { throw "Installazione Python fallita (codice $($proc.ExitCode))" }
     }
-    if (!(Test-Path $py)) { throw 'Python non trovato nella cartella prevista' }
+    if (!(Test-Path -LiteralPath $py)) {
+        $candidates = @(Get-ChildItem -LiteralPath $rootPath -Filter python.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 12 -ExpandProperty FullName)
+        Write-Host ('Python search under Serenus root: ' + ($candidates -join '; '))
+        throw ('Python non trovato nella cartella prevista: ' + $py + '. Controllare python-installer.log')
+    }
+    & $py --version
+    if ($LASTEXITCODE -ne 0) { throw 'Il runtime Python installato non si avvia' }
     $venvPython = Join-Path $launcher '.venv\Scripts\python.exe'
     if (!(Test-Path $venvPython)) {
         & $py -m venv (Join-Path $launcher '.venv')
@@ -35,9 +53,14 @@ try {
         & $venvPython -m updater.cli apply --root $rootPath --repo 'Leggenddario/-serenus-releases' --public-key $key
         if ($LASTEXITCODE -ne 0) { throw 'Download, verifica o attivazione Serenus falliti' }
     } finally { Pop-Location }
+    Set-Content -LiteralPath $marker -Encoding ASCII -Value ('OK ' + (Get-Date -Format o))
     Write-Host 'Serenus installato correttamente.'
     exit 0
 } catch {
-    Write-Host "ERRORE: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ('ERRORE: ' + $_.Exception.Message) -ForegroundColor Red
+    Write-Host ('Bootstrap log: ' + $bootstrapLog)
     exit 1
+} finally {
+    try { Stop-Transcript | Out-Null } catch {}
 }
+

@@ -50,9 +50,35 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installer = (Resolve-Path 'installer/dist/Serenus_Setup.exe').Path
           Write-Host 'Running silent Windows installer...'
-          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait -PassThru
+          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/LOG=' + (Join-Path $env:RUNNER_TEMP 'serenus-setup.log')) -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Serenus_Setup failed with exit code $($process.ExitCode)" }
           Write-Host 'Windows installer exited successfully.'
+      - name: Verify bootstrap completed and inspect installed paths
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Serenus'
+          Write-Host ('Expected installation root: ' + $root)
+          if (Test-Path $root) {
+            Get-ChildItem -LiteralPath $root -Force | Select-Object Name,Mode,Length | Format-Table -AutoSize
+            $logDir = Join-Path $root 'install-logs'
+            if (Test-Path $logDir) {
+              Get-ChildItem -LiteralPath $logDir | Select-Object Name,Length | Format-Table -AutoSize
+              $log = Join-Path $logDir 'bootstrap.log'
+              if (Test-Path $log) { Get-Content -LiteralPath $log -Tail 80 }
+              $pylog = Join-Path $logDir 'python-installer.log'
+              if (Test-Path $pylog) { Get-Content -LiteralPath $pylog -Tail 40 }
+            }
+          }
+          $python = Join-Path $root 'python-runtime/python.exe'
+          $marker = Join-Path $root 'install-logs/bootstrap-success.txt'
+          $state = Join-Path $root 'state/update-state.json'
+          if (!(Test-Path $python)) { throw "Missing installed Python: $python" }
+          if (!(Test-Path $marker)) { throw "Bootstrap did not complete: $marker" }
+          if (!(Test-Path $state)) { throw "Missing activated Serenus state: $state" }
+          & $python --version
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Python cannot execute' }
       - name: Smoke-test installed app and rollback logic
         shell: pwsh
         timeout-minutes: 5
@@ -62,6 +88,30 @@ jobs:
           if (!(Test-Path $python)) { throw "Python runtime missing: $python" }
           & $python 'installer/test_installed_serenus.py'
           if ($LASTEXITCODE -ne 0) { throw "Installed Serenus smoke test failed: $LASTEXITCODE" }
+      - name: Preserve installation logs (even on failure)
+        if: always()
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:LOCALAPPDATA 'Serenus'
+          $dir = Join-Path $root 'install-logs'
+          $files = @{
+            'bootstrap.log' = 'serenus-bootstrap.log'
+            'python-installer.log' = 'serenus-python-installer.log'
+          }
+          foreach ($name in $files.Keys) {
+            $src = Join-Path $dir $name
+            if (Test-Path $src) { Copy-Item $src (Join-Path $env:RUNNER_TEMP $files[$name]) -Force }
+          }
+      - name: Upload installation diagnostics (also on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Serenus-Windows-Install-Diagnostics
+          path: |
+            ${{ runner.temp }}/serenus-setup.log
+            ${{ runner.temp }}/serenus-bootstrap.log
+            ${{ runner.temp }}/serenus-python-installer.log
+          if-no-files-found: warn
       - name: Upload setup to workflow artifacts
         uses: actions/upload-artifact@v4
         with:

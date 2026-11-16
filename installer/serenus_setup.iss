@@ -55,6 +55,12 @@ begin
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Command, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
       RaiseException('Impossibile avviare la procedura di installazione Serenus');
     if ResultCode <> 0 then
-      RaiseException('Installazione di Serenus non completata. Controlla il messaggio nella finestra PowerShell.');
+      RaiseException('Bootstrap Serenus fallito: controllare {app}\install-logs\bootstrap.log');
+    if not FileExists(ExpandConstant('{app}\python-runtime\python.exe')) then
+      RaiseException('Runtime Python mancante dopo il bootstrap: controllare i log installazione');
+    if not FileExists(ExpandConstant('{app}\install-logs\bootstrap-success.txt')) then
+      RaiseException('Bootstrap non confermato: manca il marcatore di installazione riuscita');
+    if not FileExists(ExpandConstant('{app}\state\update-state.json')) then
+      RaiseException('Serenus non attivato: manca lo stato della versione installata');
   end;
 end;
