@@ -1,0 +1,59 @@
+name: Build Serenus Windows Setup
+on:
+  push:
+    paths:
+      - 'installer/**'
+      - '.github/workflows/build-serenus-setup.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout installer sources
+        uses: actions/checkout@v4
+      - name: Check public-key and installer files
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'installer/release-public-key.txt')) { throw 'Public release key missing' }
+          if ((Get-Content 'installer/release-public-key.txt' -Raw).Trim().Length -lt 40) { throw 'Invalid release public key' }
+          if (!(Test-Path 'installer/updater/core.py')) { throw 'Updater missing' }
+      - name: Download signed official Python Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $url='https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'
+          Invoke-WebRequest -Uri $url -OutFile 'installer/python-3.12.10-amd64.exe'
+          $sig=Get-AuthenticodeSignature 'installer/python-3.12.10-amd64.exe'
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
+            throw "Unexpected Python installer signature: $($sig.Status) $($sig.SignerCertificate.Subject)"
+          }
+      - name: Install free Inno Setup compiler
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: Build Serenus_Setup.exe
+        shell: pwsh
+        run: |
+          $compiler=@('C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\Program Files\Inno Setup 6\ISCC.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (!$compiler) { throw 'Inno Setup compiler missing' }
+          Push-Location 'installer'
+          & $compiler 'serenus_setup.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
+          Pop-Location
+      - name: Upload setup to workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Serenus-Setup-Windows
+          path: installer/dist/Serenus_Setup.exe
+          if-no-files-found: error
+      - name: Attach installer to existing Serenus 1.6 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view v1.6.0 --repo Leggenddario/-serenus-releases *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'Release v1.6.0 missing; no installer uploaded' }
+          gh release upload v1.6.0 installer/dist/Serenus_Setup.exe --repo Leggenddario/-serenus-releases --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Setup release upload failed' }
