@@ -4,6 +4,7 @@ on:
     paths:
       - 'installer/**'
       - '.github/workflows/build-serenus-setup.yml'
+      - 'installer/test_installed_serenus.py'
   workflow_dispatch:
 permissions:
   contents: write
@@ -42,6 +43,25 @@ jobs:
           & $compiler 'serenus_setup.iss'
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
           Pop-Location
+      - name: Install the EXE on a fresh Windows runner
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Resolve-Path 'installer/dist/Serenus_Setup.exe').Path
+          Write-Host 'Running silent Windows installer...'
+          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Serenus_Setup failed with exit code $($process.ExitCode)" }
+          Write-Host 'Windows installer exited successfully.'
+      - name: Smoke-test installed app and rollback logic
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $python = Join-Path $env:LOCALAPPDATA 'Serenus/python-runtime/python.exe'
+          if (!(Test-Path $python)) { throw "Python runtime missing: $python" }
+          & $python 'installer/test_installed_serenus.py'
+          if ($LASTEXITCODE -ne 0) { throw "Installed Serenus smoke test failed: $LASTEXITCODE" }
       - name: Upload setup to workflow artifacts
         uses: actions/upload-artifact@v4
         with:
