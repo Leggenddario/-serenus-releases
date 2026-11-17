@@ -2,6 +2,16 @@ param(
     [Parameter(Mandatory=$true)][string]$Root,
     [Parameter(Mandatory=$true)][string]$PythonInstaller
 )
+# SERENUS_WINDOWS_PS_MODULE_PATH_FIX_V1
+# When Windows PowerShell 5.1 is launched by a process that also uses
+# PowerShell 7, PSModulePath may contain incompatible PS7 module folders.
+# Use only the standard Windows PowerShell module roots in this child process.
+$winPsModuleRoots = @(
+    (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules'),
+    (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+    (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules')
+)
+$env:PSModulePath = ($winPsModuleRoots -join [IO.Path]::PathSeparator)
 $ErrorActionPreference = 'Stop'
 $rootPath = [IO.Path]::GetFullPath($Root)
 $logs = Join-Path $rootPath 'install-logs'
@@ -25,6 +35,7 @@ try {
     if (Test-Path $state) { throw 'Installazione Serenus gia presente. Usa Updater per aggiornare.' }
     if (!(Test-Path $py)) {
         Write-Host 'Installazione Python locale (senza modificare PATH di sistema)...'
+        Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
         $sig=Get-AuthenticodeSignature -FilePath $PythonInstaller
         if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Python Software Foundation') { throw 'Firma del programma Python non verificata' }
         $pythonLog = Join-Path $logs 'python-installer.log'
